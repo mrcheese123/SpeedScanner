@@ -1,71 +1,3 @@
-//create table speed(SSID varchar(30) NOT NULL, isp text, download double, upload double, password bool, weblogin bool, PRIMARY KEY(SSID));
-//g++ -std=c++14 main.cpp -o speedt -l sqlite3 // -pthread
-
-/*
-_______ ____  _____   ____
-|__   __/ __ \|  __ \ / __ \
-	| | | |  | | |  | | |  | |
-	| | | |  | | |  | | |  | |
-	| | | |__| | |__| | |__| |
-	|_|  \____/|_____/ \____/
-
-	SEV 1:
-	Main loop does not loop properly. For loop for unsecuredOption() hanging?  --Done?
-
-	SEV 2:
-	Password DB
-	Multithread connection status to end speedtest on network disconnect.
-	Add --verbose option
-
-	Implement GPS database push - Done?
-	Test GPS database push >> Make sure iss parsing in getGPS() is correct
-
-	SEV 3:
-	Run network scan before next network in line for test? Speeds up testing. No need to reparse, just search scan for BSSID. Already checks the database.
-	Multithread this? EG run the scan in a separate thread and search the object for the BSSID.
-
-	SEV 4:
-	Create header file
-	Separate functions into multiple files
-
-	FEATURE:
-	Measure RSSI in separate thread to test signal strength
-	Implement GPS logging on Pi
-	Wifi browser login
-*/
-
-/*
-DEPENDENCIES:
-
-All systems:
-https://github.com/sivel/speedtest-cli
-SOCI librarys. Needs to be installed to system. Automate install?
-Sqlite3
-https://github.com/sindresorhus/fast-cli
-
-Mac OS only:
-https://github.com/fulldecent/corelocationcli
-
-Raspberry Pi only:
-GPS utility:
-
-*/
-
-//NOTE: How to implement auto-login on public wifi
-//https://github.com/mutantmonkey/openwifi
-/*
-If all you need to do is open a browser and accept terms + conditions .... then maybe you can simply open a chrome debug window and make note of what POST values get sent to their website once you accept, and what URL those values are sent to.
-
-Then just write a local HTML file with an iframe inside it. The iframe would point to any internet site, in order to cause it to be populated with the "please accept our conditions" screen.
-
-Then write a form on your main window that contains hidden fields that correspond to all the POST values that need to be sent, from earlier. Give the form an "action" of the same URL from above as well. Give the form an ID so you can access it from javascript.
-
-Then write some short simple javascript code that basically waits a few seconds, and then submits the form.
-
-Of course you'll then need to have raspbian auto-login to your account, and spawn a web browser with your custom HTML file as a homepage.
-
-If you're lucky, that should do the trick.
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <cstdio>
@@ -76,15 +8,12 @@ If you're lucky, that should do the trick.
 #include <array>
 #include <sstream>
 #include <unistd.h>
-//#include <thread>
-#include <term.h>
 #include <math.h>
 #include <fstream>
 #include <vector>
+#include <signal.h>
 
 #include <sqlite_modern_cpp.h>
-
-//#define GetCurrentDir getcwd
 
 using namespace sqlite;
 using namespace std;
@@ -94,8 +23,7 @@ struct NetworkObj
 {
 	string SSID, ISP, BSSID;
 	double download, upload, gpslat, gpslong;
-	int passOp, loginOp; // 0 = No 1 = Yes because I don't want to work with bool conversion right now.
-	//string password; //Encrypt?
+	int passOp, loginOp; // 0 = No 1 = Yes because there's no point in doing bool conversion from Sql databases that I know of.
 };
 
 struct ScanObj
@@ -104,48 +32,9 @@ struct ScanObj
 	int RSSI;
 };
 
-//template<>//TODO: password type conversion after passworddb implementation
-/*struct type_conversion<NetworkObj>
+void ClearScreen()
 {
-	typedef values base_type;
-
-	static void from_base(values const & v, indicator, NetworkObj& sped)
-	{
-		sped.SSID = v.get<string>("SSID");
-		sped.ISP = v.get<string>("isp");
-		sped.download = v.get<double>("download");
-		sped.upload = v.get<double>("upload");
-		sped.passOp = v.get<int>("password");
-		sped.loginOp = v.get<int>("weblogin");
-	}
-
-	static void to_base(const NetworkObj& sped, values& v, indicator& ind)
-	{
-		v.set("SSID", sped.SSID);
-		v.set("ISP", sped.ISP);
-		v.set("download", sped.download);
-		v.set("upload", sped.upload);
-		v.set("password", sped.passOp);
-		v.set("weblogin", sped.loginOp);
-		ind = i_ok;
-	}
-};*/
-
-/*static int callback(void *NotUsed, int argc, char **argv, char **azColName) //Dissect and implement in searchNetworkDB()
-{
-   int i;
-	 cout << "SUPRISE" << endl;
-   for(i = 0; i<argc; i++)
-	 {
-      printf("%s = %s\n", azColName[i], argv[i] ? argv[i] : "NULL");
-   }
-   printf("\n");
-   return 0;
-}*/
-
-void checkDependencies() //TODO: Makefile?
-{
-
+	cout << "\x1B[2J\x1B[H"; //Ugly way to clear the screen for UNIX systems
 }
 
 void ctrlc_handler(int s)
@@ -154,7 +43,37 @@ void ctrlc_handler(int s)
 	exit(1);
 }
 
-void trim(std::string& s) //Decrepatated? Now in SpeedObj.
+void checkDependencies() //TODO: Makefile?
+{
+	/*
+	List of Dependencies
+	--------------------
+	sqlite3
+	libsqlite3-dev
+	https://github.com/sivel/speedtest-cli
+	sqlite_modern_cpp
+
+
+	Mac OS only:
+	https://github.com/fulldecent/corelocationcli
+	*/
+}
+
+string exec(const char* cmd)
+{
+	array<char, 128> buffer;
+	string result;
+	shared_ptr<FILE> pipe(popen(cmd, "r"), pclose);
+	if (!pipe) throw std::runtime_error("popen() failed!");
+	while (!feof(pipe.get()))
+	{
+		if (fgets(buffer.data(), 128, pipe.get()) != nullptr)
+			result += buffer.data();
+	}
+	return result;
+}
+
+void trim(std::string& s)
 {
 	 size_t p = s.find_first_not_of(" \t");
 	 s.erase(0, p);
@@ -164,104 +83,28 @@ void trim(std::string& s) //Decrepatated? Now in SpeedObj.
 		s.erase(p+1);
 }
 
-
-void ClearScreen()
-{
-	cout << "\x1B[2J\x1B[H"; //Ugly way to clear the screen for UNIX systems
-}
-
-std::string exec(const char* cmd)
-{
-	std::array<char, 128> buffer;
-	std::string result;
-	std::shared_ptr<FILE> pipe(popen(cmd, "r"), pclose);
-	if (!pipe) throw std::runtime_error("popen() failed!");
-	while (!feof(pipe.get())) {
-		if (fgets(buffer.data(), 128, pipe.get()) != nullptr)
-			result += buffer.data();
-	}
-	return result;
-}
-
-/*void askPassword(std::string& password)//TODO: Pull wifi password from password database
-{
-	char inTemp;
-	while(true)
-	{
-		cout << "Password? (y/n): ";
-		cin >> inTemp;
-		if(inTemp=='y')
-		{
-			cout << "Enter password: ";
-			cin >> password;
-			break;
-		}
-		else if(inTemp=='n')
-		{
-			password = "NONE";
-			break;
-		}
-		else
-		{
-			cout << "Incorrect input." << std::endl;
-			inTemp = ' ';
-			continue;
-		}
-	}
-}*/
-
-
-/*
- public:
-	SpeedObj(string& cSSID, string& cISP, double& cDownload, double& cUpload, int& cPassOp, int& cLoginOp, string& cPassword = NULL)
-	 :SSID(cSSID), ISP(cISP), download(cDownload), upload(cUpload), passOp(cPassOp), loginOp(cLoginOp), password(cPassword)
-	 {}
-
-	string getSSID() const
-	{ return SSID; }
-
-	string getISP() const
-	{ return ISP; }
-
-	double getDownload() const
-	{ return download; }
-
-	double getUpload() const
-	{ return upload; }
-
-	bool hasPass() const
-	{ return passOp; }
-
-	bool hasLogin() const
-	{ return loginOp; }
-
-};*/
-
 class SpeedTest
 {
+private:
 	bool testFinished;
-	//mutex m_mutex;
+	//mutex m_mutex; //For eventual multithreading
 
-	int parseTest(string & input, NetworkObj & output) //WARNING: ONLY PARSES speedtest-cli OUTPUT. Decrepatated parse above can parse fast-cli
+	int parseTest(string & input, NetworkObj & output)
+	//WARNING: ONLY PARSES speedtest-cli OUTPUT. Could use some cleanup in further iterations with optional adaptability for other interfaces
 	{
-		trim(input); //Should I move this inside the class for data protection? Do I care?
+		trim(input);
 		stringstream ss(input);
-		//cout << "Output: " << output << endl; //DEBUG: Prints pre-parsed speedtest
 		string temp, temp2;
 		while(getline(ss, temp))
 		{
-			if(temp.compare("Download:")==1)
-			//WARNING: So this shouldn't be working? should return 0...
+			if(temp.compare("Download:")==1) //Note: I know this isn't how this should work but it does? Feedback is welcome. Should be checking '==0'
 			{
 				std::istringstream iss(temp);
-				//cout << "DL: "<< temp << endl; //DEBUG
 				iss >> temp2 >> output.download;
-				//cout << "Found download : " << output.download << endl; //DEBUG
 			}
 			else if(temp.compare("Upload:") ==1)
 			{
 				istringstream iss(temp);
-				//cout << "UL: "<< temp << endl; //DEBUG
 				iss >> temp2 >> output.upload;
 			}
 			else if(temp.compare("Testing from")==1)
@@ -270,7 +113,6 @@ class SpeedTest
 				iss >> temp2  >> temp2 >> output.ISP;
 			}
 		}
-		//cout << "DOWNLOAD: " <<output.download << endl; //VERBOSE: Download speed for specified network
 		if(output.download < 0 || output.download > 1500)
 		{
 			cerr << "Did not find download speed." << endl;
@@ -300,11 +142,9 @@ public:
 		NetworkObj & outputCopy = const_cast<NetworkObj &>(output);
 
 		string unparsedOutput = exec(choice);
-		//size_t testingSubstr = unparsedOutput.find("Cannot retrieve speedtest configuration"); //ERROR CHECK
-		//cout << "SUBSTRING TEST: " << testingSubstr << endl;//Retrieving speedtest.net configuration... Cannot retrieve speedtest configuration
 		if(unparsedOutput.find("Cannot retrieve speedtest configuration") ==42)
 		{
-			cerr << "Test could not connect." << endl << endl;
+			cerr << "Test could not connect." << endl;
 			return 1;
 		}
 
@@ -314,9 +154,7 @@ public:
 		}
 
 		/*********************************/
-		//WARNING: CHECK IF PASSWORD? CHECK WEBLOGIN? Currently manually assumes no password.
-		//askPassword(password);
-		//askWebLogin(webLogin);
+		//TODO: Password and login tests are not yet implemented. Currently manually assumes no password or login.
 		outputCopy.passOp = 0;
 		outputCopy.loginOp = 0;
 		/*********************************/
@@ -326,19 +164,7 @@ public:
 		return 0;
 	}
 
-	/*void debugRunTest(std::string const &output, const char* choice)
-	{
-			//lock_guard<std::mutex> guard(m_mutex);
-		std::string & outputCopy = const_cast<std::string &>(output);
-			//cout << "about to run - "<<choice;
-		outputCopy = exec(choice);
-
-
-		//TODO: Put test failure check here instead of parseTextOutput()
-		testFinished = true;
-	}*/
-
-	void loading()
+	void loading() //Currently not used, but will be implemented in a separate thread in the future.
 	{
 		const int trigger = 500; // ms
 		const int numDots = 4;
@@ -346,11 +172,11 @@ public:
 			//m_mutex.lock();
 		while (!testFinished)
 		{
-				// Return and clear with spaces, then return and print prompt.
+			// Return and clear with spaces, then return and print prompt.
 			printf("\r%*s\r%s", sizeof(prompt) - 1 + numDots, "", prompt);
 			fflush(stdout);
 
-				// Print numDots number of dots, one every trigger milliseconds.
+			// Print numDots number of dots, one every trigger milliseconds.
 			for (int i = 0; i < numDots; i++)
 			{
 				usleep(trigger * 1000);
@@ -368,97 +194,77 @@ int getGPS(NetworkObj &theNetwork)
 		#ifdef __MACH__
 			string output = exec("corelocationcli");
 			istringstream iss(output);
-			//cout << "GPS: " << output << endl; //DEBUG
-			if(iss >> theNetwork.gpslat >> theNetwork.gpslong) //Change to try-catch?
+			//cout << "GPS: " << output << endl; //VERBOSE: Print GPS data
+			if(iss >> theNetwork.gpslat >> theNetwork.gpslong)
 			{
 				return 0;
 			}
 			else
 			{
 				cerr << "Problem grabbing Mac GPS data.";
-				//LOCATION MANAGER ERROR: The operation couldn’t be completed. (kCLErrorDomain error 0.)
 				return 1;
 			}
 		#endif
 
-		#elif __linux__ || __unix__ //WARNING: TODO: Grab Pi GPS data
-			cerr << "GPS NOT IMPLEMENTED YET" << endl;
-			theNetwork.gpslat = 0;
-			theNetwork.gpslat = 0;
-			return 1;
-		#else
-			return 1;
-		#endif
+	#elif __linux__ || __unix__
+		cerr << "GPS NOT IMPLEMENTED YET" << endl;
+		theNetwork.gpslat = 0;
+		theNetwork.gpslat = 0;
+		return 1;
+	#else
+		return 1;
+	#endif
 }
 
-/*
-	//Spin up two threads literally only for the loading animation of the ellipse...
-	std::thread speedThread(&SpeedTest::debugRunTest, &testObject, ref(output), testType);
-	std::thread loadThread(&SpeedTest::loading, &testObject);
-	if(speedThread.joinable())
-	{
-		speedThread.join();
-	}
-	if(loadThread.joinable())
-	{
-		loadThread.join();
-	}
-
-	//std::thread speedThread(&SpeedTest::runTest, &testObject, ref(output), testType);
-	//if(speedThread.joinable())
-	//{
-	//	speedThread.join();
-	//}
-*/
 
 int runSpeedTest(NetworkObj& output)
 {
 	SpeedTest testObject;
-	char const* testType = "speedtest-cli"; //Change to change speedtest used. Only supports speedtest-cli right now due to SpeedTest parseTest class
+	char const* testType = "speedtest-cli"; //Change to change speedtest used. Only supports speedtest-cli right now due to SpeedTest class parseTest() function
 
-	//Spin up runTest thread
-	//void runTest(NetworkObj const & output, const char* choice)
-	if(testObject.runTest(output, testType)!=0) //TODO: Does not catch speedtest fail
+
+	if(testObject.runTest(output, testType)!=0)
 	{
-		cerr << "Test failed in runTest()"<<endl;
+		cerr << "Test failed in runTest()"<<endl; //ERROR
 		return 1;
 	}
 
+	cout << "Speed test finished for " << output.SSID << "." << endl; //VERBOSE
+	cout << "DOWNLOAD: " <<output.download << endl; //VERBOSE: Download speed for specified network
+	cout << "UPLOAD: " <<output.upload << endl; //VERBOSE: Upload speed for specified network
+	cout << endl;
 
-
-	cout << "Speed test finished for " << output.SSID << "." << endl << endl; //VERBOSE
-	//cout << "DOWNLOAD: " <<output.download <<endl; //DEBUG
-
-	return 0; //TODO: More error checking?
+	return 0;
 }
 
 
 
-int scanNetworks(std::vector<ScanObj>& netScan) //TODO: fix for linux parsing
+int scanNetworks(vector<ScanObj>& netScan)
 {
 
 	#ifdef __APPLE__
 		#ifdef __MACH__
-			std::string wifiInfo = exec("airport -s");
+			string wifiInfo = exec("airport -s");
+
 			trim(wifiInfo);
 			if(wifiInfo.compare("No networks found")==1)
 			{
-				std::cerr << "No wifi networks in range." << endl;
+				cerr << "No wifi networks in range." << endl;
 				return 1;
 			}
 			else
 			{
-				//cout << wifiInfo;
+				//cout << wifiInfo; //VERBOSE: Prints the current list of wifi networks
 			}
-			std::stringstream ss(wifiInfo);
-			std::string temp, temp2;
-			//TODO: parse quality and password needs
+
+			stringstream ss(wifiInfo);
+			string temp, temp2;
 			getline(ss, temp);
 			string::size_type sz;
-			while(getline(ss, temp)) //TODO: CLEAN THIS UP
+			while(getline(ss, temp))
 			{
 				ScanObj row;
-				std::istringstream iss(temp);
+				istringstream iss(temp);
 				int i = 0;
 				while(iss>>temp2)
 				{
@@ -491,65 +297,138 @@ int scanNetworks(std::vector<ScanObj>& netScan) //TODO: fix for linux parsing
 		#endif
 
 
-	#elif __linux__ || __unix__ // all unices not caught above
-		wifiInfo = exec("sudo iwlist wlan0 scan | grep \"Address\|ESSID\|Encryption key\|Signal level\"");
-		/*
-		Cell 23 - Address: 06:18:0A:7F:37:16
-			Quality=26/70  Signal level=-84 dBm
-      Encryption key:on
-      ESSID:"Specht Guest"
-		*/
-		stringstream ss(wifiInfo);
-		string temp, temp2;
-		int i = 0;
-		while(getline(ss, temp))
-		{
-			ScanObj row;
-			std::istringstream iss(temp);
-			cout << "i = " << i << endl;
+	#elif __linux__ || __unix__  //TODO: Parse output
+		string wifiInfo = exec("sudo iwlist wlan0 scan | grep \"Address\\|ESSID\\|Encryption key\\|Signal level\\|WPA\"");
+		//cout << wifiInfo << endl; //DEBUG: Prints raw output
 
-			while(iss>>temp2)
+		stringstream ss(wifiInfo);
+		string temp, temp2, securityString;
+		int i = 0;
+		int b = 0;
+		bool security;
+		string::size_type sz;
+		ScanObj * row = new ScanObj;
+
+		while(getline(ss, temp)) //TODO: Check for no networks
+		{
+			trim(temp);
+			if(i>2&&(temp.substr(0,4)).compare("Cell")==0) //On the next cell
 			{
-				cout << temp2 << endl;
+				//Reset variables for next block
+				i=0;
+				security = false;
+				securityString = "";
+
+				//////////////////////////////////////
+				//DEBUG: Prints the ScanObj right before it's pushed into the vector
+				//cout << row->SSID << endl;
+				//cout << row->BSSID << endl;
+				//cout << row->RSSI << endl;
+				//cout << row->security << endl;
+				//cout << endl;
+				//////////////////////////////////////
+
+				netScan.push_back(*row);
+				row = new ScanObj;
 			}
 
-			if(i==3)
+			if(i==0)
 			{
-				netScan.push_back(row);
-				i=0;
-				continue;
+				row->BSSID = temp.substr(19,(temp.length()-1));
+			}
+			else if(i==1)
+			{
+				//cout << temp << "." << endl;
+				//cout << temp.length() << endl;
+				//cout << (temp.substr(28,(temp.length()-3))) << endl;
+				row->RSSI = stoi(temp.substr(28,(temp.length()-3)),&sz);
+			}
+			else if(i==2)
+			{
+				securityString = temp.substr(15,temp.length()-1);
+				//cout << "securityString =" << securityString.compare("on") << endl;
+				if(securityString.compare("on")==0)
+				{
+					security = true;
+				}
+				else if(securityString.compare("off")==0)
+				{
+					security = false;
+					row->security = "NONE";
+				}
+				else
+				{
+					cerr << "Did not grab encryption string in scan." << endl;
+					return 1;
+				}
+			}
+			else if(i==3)
+			{
+				row->SSID = temp.substr(7,(temp.length()-8));
+			}
+			else if(security)
+			{
+				if(i>4)
+				{
+					row->security += " ";
+				}
+				if(temp.find("WPA2") != string::npos)
+				{
+					row->security += "WPA";
+				}
+				else if(temp.find("WPA") != string::npos)
+				{
+					row->security += "WPA2";
+				}
+				else if(temp.find("WEP") != string::npos)
+				{
+					row->security += "WEP";
+				}
+				else
+				{
+					cerr << "Invalid security parse." << endl;
+					cerr << "Current line data: " << temp << endl;
+					return 1;
+				}
+			}
+			else
+			{
+				cerr << "Too much data" << endl;
+				cerr << temp << endl;
+				//return 1;
 			}
 			i++;
 		}
+		return 0;
 
 	#else
 		cerr << "Unknown compiler";
 		return 0;
+
 	#endif
-
 }
 
-void debugNetworkScan() //TODO: DEBUG:
-{
-
-}
-
-/*vector<char> toVector( const std::string& s ) //Do I need this?
-{
-  vector<char> v(s.size()+1);
-  memcpy( &v.front(), s.c_str(), s.size() + 1 );
-  return v;
-}*/
-
-int searchNetworkDB(ScanObj& scanIn, NetworkObj& network) //TODO: Test this!!!
-//std::vector<std::vector<std::string> >& wifiList)
-//TODO: CHANGE TO MORE UNIQUE IDENTIFIER FOR NETWORK, NOT SSID
+int searchNetworkDB(ScanObj& scanIn, NetworkObj& network)
 //-1 is error, 0 is in DB, 1 is not in DB
 //modifys network to return all values into the object
 {
 	try
 	{
 		database db("./Databases/liteDBTest.db");
+
+		db <<
+         "create table if not exists speed ("
+         "   BSSID string primary key not null,"
+         "   SSID string NOT NULL,"
+         "   isp text,"
+         "   download double,"
+				 "   upload double,"
+				 "   password bool,"
+				 "   weblogin bool,"
+				 "   gpslat decimal(9,6),"
+				 "   gpslong decimal(9,6)"
+         ");";
+
 		db << "SELECT BSSID, SSID, isp, download, upload, password, weblogin, gpslat, gpslong FROM speed WHERE BSSID = ?"
 			 << scanIn.BSSID >> tie(network.BSSID, network.SSID, network.ISP, network.download, network.upload, network.passOp, network.loginOp, network.gpslat, network.gpslong);
 	}
@@ -566,45 +445,41 @@ int searchNetworkDB(ScanObj& scanIn, NetworkObj& network) //TODO: Test this!!!
 
 	if(scanIn.BSSID.compare(network.BSSID) == 0)
 	{
-		//cout << "BSSIDs are the same. "; //DEBUG
+		//cout << "BSSIDs are the same." << endl; //VERBOSE
 		return 0;
 	}
 	cerr << "Uncaught error." << endl;
 	return -1;
+}
 
-/********************DEBUG PRINT SQL SERVER***********************/
-//create table speed(SSID varchar(30) NOT NULL, isp text, download double, upload double, password bool, weblogin bool, PRIMARY KEY(SSID));
-/*	rowset<row> rs = (sql.prepare << "select SSID, isp, download, upload, password, weblogin from speed");
-
-	// iteration through the resultset:
-	for (rowset<row>::const_iterator it = rs.begin(); it != rs.end(); ++it)
+/*const std::string& searchPasswordDB(NetworkObj& network, int& error) //TODO: THIS IS JUST A TEMPLATE
+{
+	string * password;
+	string databaseName = "Password.db";
+	string dblocation = "./Databases/"+databaseName;
+	try
 	{
-	    row const& row = *it;
+		database db(dblocation);
+		db << "SELECT password FROM speed where SSID = ?"
+		 	 << &password >> tie(network.SSID);
+	}
+	catch(sqlite_exception& e)
+	{
+		if(e.get_code() == 101)
+		{
+			cerr << "Cannot find a password for " << network.SSID << " in database " << databaseName << endl; //VERBOSE
+			error = 1;
+			return "";
+		}
+	}
 
-			cout << "SSID|ISP|Download|Upload|Password|Weblogin" <<endl;
-	    // dynamic data extraction from each row:
-	    cout << row.get<string>(0) << '|'
-	         << "ISP: " << row.get<string>(1) << '|'
-	         << "Download: " << row.get<double>(2) << '|'
-					 << "Upload: " << row.get<double>(3) << '|'
-					 << "Password: " << row.get<int>(4) << '|'
-					 << "Weblogin: " << row.get<int>(5) << endl;
-	}*/
-	/*****************************************************************/
-//	cerr << "HOW DID YOU BYPASS SQL CHECK?";
-//	return -1;
-}
+	error = 0;
+	return password;
+}*/
 
-const std::string& searchPasswordDB(std::vector<std::string>& network) //TODO
+int addToNetworkDB(NetworkObj& network)
 {
-
-}
-
-int addToNetworkDB(NetworkObj& network) //TODO: Test new SQL library calls
-{
-
-	//Create speed table if it does not exist
-	//TODO: Convert BSSID to BIGINT http://www.onurguzel.com/storing-mac-address-in-a-mysql-database/
+	//Create speed table and database if they do not exist
 	try
 	{
 		database db("./Databases/liteDBTest.db");
@@ -642,21 +517,25 @@ int addToNetworkDB(NetworkObj& network) //TODO: Test new SQL library calls
 	return 0;
 }
 
-int connectToNetwork(ScanObj& network) //1 is error, 0 is success TODO: Test on Pi, Test on macOS
+int connectToNetwork(ScanObj& network) //1 is error, 0 is success
 {
+	if(network.SSID.compare("xfinitywifi")==0)
+	{
+		cerr << "Public wifi node, skipping." << endl;
+		return 1;
+	}
 	#ifdef __APPLE__
-		#ifdef __MACH__ //TODO: Find new os target for macOS
-			std::string interface = "en0"; //TODO: Detect interface.
+		#ifdef __MACH__
+			std::string interface = "en0";
 			if(network.security.compare("NONE") == 0) //
 			{
-				std::string toRun = "networksetup -setairportnetwork " + interface + " " + network.SSID;
+				string toRun = "networksetup -setairportnetwork " + interface + " " + network.SSID;
 
 				int didConnect= (exec(toRun.c_str())).compare("");
 				int test = 0;
-				//cout << exec("networksetup -getairportnetwork en0").substr(0,46);
-				while(exec("networksetup -getairportnetwork en0").find("You are not associated with an AirPort network.")==46) //Run a loop until the wifi card says the connection is stable.
+				while(exec("networksetup -getairportnetwork en0").find("You are not associated with an AirPort network.")==46)
+				//Run a loop until the wifi card says the connection is stable.
 				{
-					//cout<<test << " "; //VERBOSE
 					if(didConnect != 0)
 					{
 						return 1;
@@ -667,7 +546,7 @@ int connectToNetwork(ScanObj& network) //1 is error, 0 is success TODO: Test on 
 				if(didConnect== 0) //connects to network
 				{
 					cout << "Connected to " << network.SSID << endl; //VERBOSE
-					sleep(2);
+					sleep(1); //Wait for a second on connection to network to make sure system fully connects
 				}
 				else
 				{
@@ -676,19 +555,25 @@ int connectToNetwork(ScanObj& network) //1 is error, 0 is success TODO: Test on 
 				}
 			}
 
-			else //search password DB
+			/*if(network.security.compare("WPA") == 0)
+			{
+
+			}*/
+
+			else //NOT IMPLEMENTED -- search password DB
 			{
 				//password = searchPasswordDB(network);
 			}
 			return 0;
 		#endif
+
 	#elif __linux__ || __unix__ // all unices not caught above
-		//NEED THE FOLLOWING: https://www.systutorials.com/docs/linux/man/8-wpa_cli/
-		string interface = "wlan0"; //TODO: Detect interface.
+		string interface = "wlan0";
 		if(network.security.compare("NONE"))
 		{
-			string toRun = "wpa_cli -i "+interface+" select_network $(wpa_cli -i "+interface+" list_networks | grep "+network[0]+" | cut -f 1)";
-			exec(toRun); //https://www.systutorials.com/docs/linux/man/8-wpa_cli/
+			string toRun = "wpa_cli -i "+interface+" select_network $(wpa_cli -i "+interface+" list_networks | grep "+network.SSID+" | cut -f 1)";
+			exec(toRun.c_str()); //TODO set to variable and check output for errors
+			//https://www.systutorials.com/docs/linux/man/8-wpa_cli/
 		}
 
 		else //search password DB
@@ -709,14 +594,14 @@ int unsecuredNetworkOption(ScanObj & networkRun)
 		cerr << "Failed connecting." << endl <<endl;
 		return 1;
 	}
-
 	NetworkObj completedTest;
+
 	completedTest.SSID = networkRun.SSID;
 	completedTest.BSSID = networkRun.BSSID;
 
-	if(runSpeedTest(completedTest) !=0) //speedtest fails
+	if(runSpeedTest(completedTest) !=0) //Speedtest fails
 	{
-		std::cerr << "Speedtest failed back to unsecuredOption()." << endl << endl;
+		cerr << "Speedtest failed back to unsecuredOption()." << endl << endl;
 		return 1;
 	}
 	else //speedtest is successful
@@ -726,83 +611,66 @@ int unsecuredNetworkOption(ScanObj & networkRun)
 			completedTest.gpslat = 0;
 			completedTest.gpslong = 0;
 		}
-
 		addToNetworkDB(completedTest);
-
-
-		/*DEBUG: Only runs on linux*/
-
-		/***************************/
-		//int speeds[3] =
-		// run a process and create a streambuf that reads its stdout and stderr
-		/*redi::ipstream proc("speed-test", redi::pstreams::pstdout | redi::pstreams::pstderr);
-		string line;
-		// read child's stdout
-		while (getline(proc.out(), line))
-		{
-			cout << "stdout: " << line << '\n';
-		}
-
-		// read child's stderr
-		while (getline(proc.err(), line))
-		cout << "stderr: " << line << '\n';*/
-
-		//std::cout<< "Input location: "; //TODO: move to function
-		//getline(std::cin, location);
 	}
 	return 0;
 }
 
-int main()
+int main(int argc,char** argv)
+//This will all be cleaned up in later iterations
 {
-	ClearScreen();
-
-	std::string output, location;
-	std::ofstream speedFile;
-	std::vector< ScanObj > wifiList; //better with multidimensional arrays?
-	std::vector<std::string> testNetwork;
-	std::vector< ScanObj > wifiTemp; //So we don't scan the same network in the same location
+	string output, location;
+	ofstream speedFile;
+	vector<ScanObj> wifiList;
+	vector<string> testNetwork;
+	vector<ScanObj> wifiTemp; //So we don't scan the same network in the same location
 	vector<ScanObj> untestedNetworks;
 	vector<NetworkObj> testedNetworks;
-	bool scan = true;
+	int check;
 
-	////////////////////////////////
-	//Below handles catching Ctrl-C
-		struct sigaction sigIntHandler;
+	//freopen("outputlog.txt", "w", stdout); //Moves output stream to outputlog.txt
+	//freopen("./logs/errorlog.txt", "w", stderr); //Moves error stream to errorlog.txt
 
-	  sigIntHandler.sa_handler = ctrlc_handler;
-	  sigemptyset(&sigIntHandler.sa_mask);
-	  sigIntHandler.sa_flags = 0;
+////////////////////////////////
+//Below handles catching Ctrl-C
+	struct sigaction sigIntHandler;
 
-	  sigaction(SIGINT, &sigIntHandler, NULL);
-	////////////////////////////////
+  sigIntHandler.sa_handler = ctrlc_handler;
+  sigemptyset(&sigIntHandler.sa_mask);
+  sigIntHandler.sa_flags = 0;
 
-	//checkDependencies(); //TODO: Check for package dependencies like NPM speedtest package
+  sigaction(SIGINT, &sigIntHandler, NULL);
+////////////////////////////////
 
-	//exec("networksetup -setairportpower en0 on"); //DEBUG: MAC ONLY -- Turns on WiFi card
-	
+	//ClearScreen();
 
-	while(true)
+	//exec("networksetup -setairportpower en0 on"); //DEBUG: MAC ONLY
+
+	cout << "Welcome to MrCheese123's network logger!" << endl
+			 << "A couple things are a work in progress, but everything is currently working on most versions of MacOS and Raspbian." <<endl
+			 << "To end the logger, press Ctrl-C (will be changed to ESC in the future)"
+			 << endl;
+
+	while(true) //Main loop
 	{
 		if(scanNetworks(wifiList)==1)
-		{	scan = false; cerr<<"No networks in range."<<endl; }
+		{
+			cerr << "Scan error";
+		}
 		else
-		{ scan = true; }
-
-		if(scan)
 		{
 			for (auto i: wifiList)
 			{
 				NetworkObj scanOutput;
-				int check = searchNetworkDB(i, scanOutput);
+				check = searchNetworkDB(i, scanOutput);
 				if(check == 0)
 				{
 					testedNetworks.push_back(scanOutput);
-					//cout << scanOutput.SSID << " is in the database." << endl;
+					cout << scanOutput.SSID << " is in the database." << endl; //VERBOSE
 				}
 				else if (check == 1)
 				{
-					if(wifiTemp.empty()!=true)//TODO: Fix this line. Goes through last wifi list so we don't do extra scans
+					if(wifiTemp.empty()!=true)
 					{
 						bool wasLast = false;
 						for(auto b:wifiTemp)
@@ -822,14 +690,13 @@ int main()
 				}
 				else
 				{
-					cerr << "SQL NOT FUNCTIONING PROPERLY. EXITTING.";
+					cerr << "SQL NOT FUNCTIONING PROPERLY. EXITING." << endl;
 					return 1;
 				}
 			}
 			wifiTemp=untestedNetworks; //reset temp to the current list.
-			cout << endl;
 
-			for(auto i: untestedNetworks) //TODO: Move to function
+			for(auto i: untestedNetworks)
 			{
 				if(i.security.compare("NONE") == 0)
 				{
@@ -838,40 +705,20 @@ int main()
 				}
 				else
 				{
-					cerr<<"Networks with passwords are currently unsupported. " << endl;
-					cerr<< i.SSID << " has a security type of: " << i.security << endl;
-					cerr << endl;
+					cerr <<"Networks with passwords are currently unsupported. " << endl; //VERBOSE
+					cerr << i.SSID << " has a security type of: " << i.security << endl;  //VERBOSE
+					cerr << endl; //VERBOSE
 				}
 			}
 		}
 		cout << "Sleeping..." << endl; //VERBOSE
-		sleep(30); //Waits 15 seconds before repeating.
-		ClearScreen();
-		//cout << "Clearing variables and running again." << endl; //VERBOSE
+		sleep(15); //Adjust to reduce or increase wait times between scans
 		output = "";
 		location = "";
 		wifiList.clear();
 		testNetwork.clear();
 		untestedNetworks.clear();
 		testedNetworks.clear();
-		scan = true;
+		wifiTemp.clear();
 	}
-	//So this sets up a text file to store everything. Should I keep it if the database dies as a backup?
-	/*		std::ifstream ifsspeedFile("speedtest.txt");
-			if(ifsspeedFile.fail())
-			{
-				speedFile.open("speedtest.txt", std::ios_base::app);
-				speedFile << "Name | ISP | DL fast.com | DL speedtest.net | UL | Password | Login | GPS\n";
-			}
-			else
-			{
-				speedFile.open("speedtest.txt", std::ios_base::app);
-				speedFile <<  "N/A" + output;
-			}
-
-			ifsspeedFile.close();*/
-
-
-	//cout << "OS: " << OS << "\n"; //DEBUG
-
 }
